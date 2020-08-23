@@ -28,23 +28,22 @@ namespace assemblyValidator
             }
         }
 
-        private class AssemblyInfoItem
+        private class AssemblyInfoItem : FileItem
         {
-            public string fullFilename;
-            public string filePath;
-            public string fileName;
-            public Version fileVersion;
             public List<FileItem> referenceList;
             public bool processed;
-
         }
 
         private class FileItem
         {
-            public readonly string fullFileName;
-            public string FilePath => FilePath(this.fullFileName);
-            public string FileName => FileName(this.fullFileName);
+            public string fullFileName;
+            public string FilePath => FilePath(fullFileName);
+            public string FileName => FileName(fullFileName);
             public Version fileVersion;
+
+            public FileItem()
+            {
+            }
 
             public FileItem(string srcFullFileName, Version expectedVersion)
             {
@@ -66,13 +65,23 @@ namespace assemblyValidator
             }
         }
 
+        private class CrossReportItem
+        {
+            public Dictionary<Version, string> FromFileList;
+            public string AssemblyFile;
+
+            public CrossReportItem(string asmFullFileName)
+            {
+                AssemblyFile = asmFullFileName;
+                FromFileList = new Dictionary<Version, string>();
+            }
+        }
+
         private static AssemblyInfoItem GetAssemblyInfo(string fullFileName)
         {
             var assemblyItem = new AssemblyInfoItem
             {
-                fullFilename = fullFileName,
-                filePath = FilePath(fullFileName),
-                fileName = FileName(fullFileName),
+                fullFileName = fullFileName,
                 fileVersion = new Version(0, 0),
                 referenceList = new List<FileItem>()
             };
@@ -153,7 +162,7 @@ namespace assemblyValidator
 
             const string configFileType = "*.config";
             string[] dllFileType = { "*.exe", "*.dll" };
-            var rootFolder = args[args.Length - 1];
+            var rootFolder = args.Length == 1 ? args[0] : args[1];
             string[] filesList = null;
 
             var recursiveFlag = SearchOption.TopDirectoryOnly;
@@ -331,11 +340,13 @@ namespace assemblyValidator
                 }
             }
 
+            var crossList = new List<CrossReportItem>();
+
             // check references for files grouped by folder
             var stop = false;
             while (!stop)
             {
-                List<AssemblyInfoItem> activeFiles = new List<AssemblyInfoItem>();
+                var activeFiles = new List<AssemblyInfoItem>();
                 activeFiles = assemblyList?.FindAll(x => !x.processed);
                 if (activeFiles == null || activeFiles.Count <= 0)
                 {
@@ -343,11 +354,32 @@ namespace assemblyValidator
                     continue;
                 }
 
-                var currentPath = activeFiles[0].filePath;
-                var folderFiles = assemblyList.FindAll(x => x.filePath == currentPath);
+                var currentPath = activeFiles[0].FilePath;
+                var folderFiles = assemblyList.FindAll(x => x.FilePath == currentPath);
                 foreach (var srcDllFile in folderFiles)
                 {
                     srcDllFile.processed = true;
+
+                    //check cross-references for different versions
+                    var verList = new CrossReportItem(srcDllFile.fullFileName);
+                    foreach (var refFromFile in folderFiles)
+                    {
+                        if (srcDllFile.FileName == refFromFile.FileName) continue;
+
+                        foreach (var referenceItem in refFromFile.referenceList)
+                        {
+                            if (referenceItem.fullFileName == srcDllFile.FileName)
+                            {
+                                if (!verList.FromFileList.ContainsKey(referenceItem.fileVersion))
+                                {
+                                    verList.FromFileList.Add(referenceItem.fileVersion, refFromFile.FileName);
+                                }
+                            }
+                        }
+                    }
+
+                    if (verList.FromFileList.Count > 1) crossList.Add(verList);
+
                     if (srcDllFile.referenceList == null || srcDllFile.referenceList.Count <= 0)
                     {
                         continue;
@@ -355,7 +387,7 @@ namespace assemblyValidator
 
                     foreach (var refFile in srcDllFile.referenceList)
                     {
-                        var foundFiles = folderFiles.FindAll(x => x.fileName == refFile.FileName);
+                        var foundFiles = folderFiles.FindAll(x => x.FileName == refFile.FileName);
                         if (foundFiles.Count > 0)
                         {
                             if (foundFiles.Count > 1)
@@ -365,12 +397,12 @@ namespace assemblyValidator
 
                             if (foundFiles[0].fileVersion < refFile.fileVersion)
                             {
-                                var fromFileItem = new FileItem(srcDllFile.fullFilename, refFile.fileVersion);
+                                var fromFileItem = new FileItem(srcDllFile.fullFileName, refFile.fileVersion);
 
-                                var rptList = outdatedList.FindAll(x => x.assemblyFile.fullFileName == foundFiles[0].fullFilename);
+                                var rptList = outdatedList.FindAll(x => x.assemblyFile.fullFileName == foundFiles[0].fullFileName);
                                 if (rptList.Count <= 0)
                                 {
-                                    var rpt = new ReportItem(foundFiles[0].fullFilename, foundFiles[0].fileVersion);
+                                    var rpt = new ReportItem(foundFiles[0].fullFileName, foundFiles[0].fileVersion);
                                     rpt.fromFileList.Add(fromFileItem);
                                     outdatedList.Add(rpt);
                                 }
@@ -387,6 +419,23 @@ namespace assemblyValidator
             var errorLevel = 0;
             // generate report to console
             // generate batch file to get correct files if any
+
+            if (crossList.Count > 1)
+            {
+                foreach (var reportItem in crossList)
+                {
+                    Console.WriteLine(reportItem.AssemblyFile + " cross-referenced by:");
+                    foreach (var fileItem in reportItem.FromFileList)
+                    {
+                        Console.WriteLine("\tv."
+                                          + fileItem.Key
+                                          + " expected by "
+                                          + fileItem.Value);
+                    }
+                }
+            }
+
+
             if (outdatedList.Count > 0)
             {
                 errorLevel = 3;
@@ -414,11 +463,11 @@ namespace assemblyValidator
                                             + " expected by "
                                             + refFile.FileName);
 
-                        var correctFile = assemblyList.Find(x => x.fileName == report.assemblyFile.FileName && x.fileVersion == refFile.fileVersion);
+                        var correctFile = assemblyList.Find(x => x.FileName == report.assemblyFile.FileName && x.fileVersion == refFile.fileVersion);
                         if (correctFile != null)
                         {
                             copyCommand.AppendLine("rem v." + correctFile.fileVersion + " => " + report.assemblyFile.fileVersion);
-                            copyCommand.AppendLine("copy " + correctFile.fullFilename + " " + report.assemblyFile.fullFileName);
+                            copyCommand.AppendLine("copy " + correctFile.fullFileName + " " + report.assemblyFile.fullFileName);
                         }
                         else
                         {
