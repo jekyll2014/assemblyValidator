@@ -161,7 +161,7 @@ namespace assemblyValidator
             UnRecoverableErrors = 5
         }
 
-        private static ErrorLevel Main(string[] args)
+        private static int Main(string[] args)
         {
             if (!(args.Length == 1 ||
                 (args.Length == 2 &&
@@ -169,7 +169,7 @@ namespace assemblyValidator
             {
                 Console.WriteLine("No root folder specified.");
                 Console.WriteLine(helpString);
-                return ErrorLevel.MissingRootFolder;
+                return (int)ErrorLevel.MissingRootFolder;
             }
 
             const string configFileType = "*.config";
@@ -197,7 +197,7 @@ namespace assemblyValidator
                     + e
                     + Environment.NewLine
                     + "Possibly a file system link found.");
-                return ErrorLevel.FileSearchError;
+                return (int)ErrorLevel.FileSearchError;
             }
 
             foreach (var fromFile in filesList)
@@ -340,7 +340,7 @@ namespace assemblyValidator
                         + e
                         + Environment.NewLine
                         + "Possibly a file system link found.");
-                    return ErrorLevel.FileSearchError;
+                    return (int)ErrorLevel.FileSearchError;
                 }
                 foreach (var file in filesList)
                 {
@@ -492,7 +492,7 @@ namespace assemblyValidator
                 }
             }
 
-            return errorLevel;
+            return (int)errorLevel;
         }
 
         private static string FilePath(string fullFileName)
