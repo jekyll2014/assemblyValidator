@@ -145,11 +145,23 @@ namespace assemblyValidator
             + Environment.NewLine
             + "Errorlevel 2 = file search error"
             + Environment.NewLine
-            + "Errorlevel 3 = recoverable errors found"
+            + "Errorlevel 3 = multiple version references found"
             + Environment.NewLine
-            + "Errorlevel 4 = unrecoverable errors found";
+            + "Errorlevel 4 = recoverable errors found"
+            + Environment.NewLine
+            + "Errorlevel 5 = unrecoverable errors found";
 
-        private static int Main(string[] args)
+        enum ErrorLevel
+        {
+            NoError = 0,
+            MissingRootFolder = 1,
+            FileSearchError = 2,
+            MultiReference = 3,
+            RecoverableErrors = 4,
+            UnRecoverableErrors = 5
+        }
+
+        private static ErrorLevel Main(string[] args)
         {
             if (!(args.Length == 1 ||
                 (args.Length == 2 &&
@@ -157,7 +169,7 @@ namespace assemblyValidator
             {
                 Console.WriteLine("No root folder specified.");
                 Console.WriteLine(helpString);
-                return 1;
+                return ErrorLevel.MissingRootFolder;
             }
 
             const string configFileType = "*.config";
@@ -185,7 +197,7 @@ namespace assemblyValidator
                     + e
                     + Environment.NewLine
                     + "Possibly a file system link found.");
-                return 2;
+                return ErrorLevel.FileSearchError;
             }
 
             foreach (var fromFile in filesList)
@@ -294,18 +306,18 @@ namespace assemblyValidator
                         var fromFileItem = new FileItem(fromFile, expectedVersion);
 
                         var rptList = outdatedList.FindAll(x => x.assemblyFile.fullFileName == dllFullFileName);
-                        if (rptList?.Count > 1)
+                        if (rptList.Count > 1)
                         {
                             Console.WriteLine("Duplicate assembly name in collection: " + dllFullFileName);
                         }
 
-                        if (rptList?.Count <= 0)
+                        if (rptList.Count <= 0)
                         {
                             var rpt = new ReportItem(dllFullFileName, dllVersion);
                             rpt.fromFileList.Add(fromFileItem);
                             outdatedList.Add(rpt);
                         }
-                        else if (rptList?.Count == 1)
+                        else if (rptList.Count == 1)
                         {
                             rptList[0].fromFileList.Add(fromFileItem);
                         }
@@ -328,15 +340,12 @@ namespace assemblyValidator
                         + e
                         + Environment.NewLine
                         + "Possibly a file system link found.");
-                    return 2;
+                    return ErrorLevel.FileSearchError;
                 }
                 foreach (var file in filesList)
                 {
                     var newAssembly = GetAssemblyInfo(file);
-                    if (newAssembly != null)
-                    {
-                        assemblyList.Add(newAssembly);
-                    }
+                    assemblyList.Add(newAssembly);
                 }
             }
 
@@ -347,7 +356,7 @@ namespace assemblyValidator
             while (!stop)
             {
                 var activeFiles = new List<AssemblyInfoItem>();
-                activeFiles = assemblyList?.FindAll(x => !x.processed);
+                activeFiles = assemblyList.FindAll(x => !x.processed);
                 if (activeFiles == null || activeFiles.Count <= 0)
                 {
                     stop = true;
@@ -416,14 +425,14 @@ namespace assemblyValidator
                 }
             }
 
-            var errorLevel = 0;
+            var errorLevel = ErrorLevel.NoError;
             // generate report to console
             // generate batch file to get correct files if any
-
             if (crossList.Count > 1)
             {
                 foreach (var reportItem in crossList)
                 {
+                    errorLevel = ErrorLevel.MultiReference;
                     Console.WriteLine(reportItem.AssemblyFile + " cross-referenced by:");
                     foreach (var fileItem in reportItem.FromFileList)
                     {
@@ -435,10 +444,9 @@ namespace assemblyValidator
                 }
             }
 
-
             if (outdatedList.Count > 0)
             {
-                errorLevel = 3;
+                errorLevel = ErrorLevel.RecoverableErrors;
                 Console.WriteLine("Assembly files reference check:");
                 var currentDir = "";
                 var copyCommand = new StringBuilder();
@@ -473,7 +481,7 @@ namespace assemblyValidator
                         {
                             copyCommand.AppendLine("rem v." + refFile.fileVersion + " => " + report.assemblyFile.fileVersion);
                             copyCommand.AppendLine("rem copy " + "_from_repository_" + " " + report.assemblyFile.fullFileName);
-                            errorLevel = 4;
+                            errorLevel = ErrorLevel.UnRecoverableErrors;
                         }
                     }
                 }
