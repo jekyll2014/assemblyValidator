@@ -11,20 +11,20 @@ namespace assemblyValidator
     {
         class AssemblyLoader : MarshalByRefObject
         {
-            Assembly assembly;
+            Assembly _assembly;
             public void Load(string file)
             {
-                this.assembly = Assembly.ReflectionOnlyLoadFrom(file);
+                this._assembly = Assembly.ReflectionOnlyLoadFrom(file);
             }
 
             public Version GetVersion()
             {
-                return this.assembly.GetName().Version;
+                return this._assembly.GetName().Version;
             }
 
             public AssemblyName[] GetReferences()
             {
-                return this.assembly.GetReferencedAssemblies();
+                return this._assembly.GetReferencedAssemblies();
             }
         }
 
@@ -48,8 +48,8 @@ namespace assemblyValidator
 
         private class AssemblyInfoItem : FileItem
         {
-            public List<FileItem> referenceList;
-            public bool processed;
+            public List<FileItem> ReferenceList;
+            public bool Processed;
         }
 
         private class ReportItem
@@ -84,7 +84,7 @@ namespace assemblyValidator
             {
                 FullFileName = fullFileName,
                 FileVersion = new Version(0, 0),
-                referenceList = new List<FileItem>()
+                ReferenceList = new List<FileItem>()
             };
 
             AssemblyName[] references = null;
@@ -96,7 +96,7 @@ namespace assemblyValidator
                     {
                         ApplicationBase = Path.GetDirectoryName(typeof(AssemblyLoader).Assembly.Location)
                     });
-                var assemblyLoader = (AssemblyLoader)domain.CreateInstanceAndUnwrap(typeof(AssemblyLoader).Assembly.FullName, typeof(AssemblyLoader).FullName);
+                var assemblyLoader = (AssemblyLoader)domain.CreateInstanceAndUnwrap(typeof(AssemblyLoader).Assembly.FullName, "");
                 assemblyLoader.Load(fullFileName);
                 try
                 {
@@ -105,7 +105,7 @@ namespace assemblyValidator
                 }
                 catch (Exception e)
                 {
-                    if (verbose)
+                    if (_verbose)
                     {
                         Console.WriteLine("Can't get assembly info: " + fullFileName);
                         Console.WriteLine("Exception: " + e.Message);
@@ -113,7 +113,7 @@ namespace assemblyValidator
 
                     try
                     {
-                        if (verbose)
+                        if (_verbose)
                         {
                             Console.WriteLine("Re-trying to load assembly: " + fullFileName);
                         }
@@ -123,7 +123,7 @@ namespace assemblyValidator
                     }
                     catch (Exception e2)
                     {
-                        if (verbose)
+                        if (_verbose)
                         {
                             Console.WriteLine("Still can't load assembly: " + fullFileName);
                             Console.WriteLine("Exception: " + e2.Message);
@@ -139,13 +139,13 @@ namespace assemblyValidator
                 {
                     foreach (var dllReference in references)
                     {
-                        assemblyItem.referenceList.Add(new FileItem(dllReference.Name + ".dll", dllReference.Version));
+                        assemblyItem.ReferenceList.Add(new FileItem(dllReference.Name + ".dll", dllReference.Version));
                     }
                 }
             }
             catch (Exception e)
             {
-                if (verbose)
+                if (_verbose)
                 {
                     Console.WriteLine("Can't load assembly: " + fullFileName);
                     Console.WriteLine("Exception: " + e.Message);
@@ -153,7 +153,7 @@ namespace assemblyValidator
 
                 try
                 {
-                    if (verbose)
+                    if (_verbose)
                     {
                         Console.WriteLine("Re-trying to load assembly: " + fullFileName);
                     }
@@ -163,7 +163,7 @@ namespace assemblyValidator
                 }
                 catch (Exception e2)
                 {
-                    if (verbose)
+                    if (_verbose)
                     {
                         Console.WriteLine("Still can't load assembly: " + fullFileName);
                         Console.WriteLine("Exception: " + e2.Message);
@@ -174,7 +174,7 @@ namespace assemblyValidator
             return assemblyItem;
         }
 
-        private static readonly string helpString = "Usage: assemblyValidator.exe [/r] [/c] [/v] rootDir"
+        private static readonly string HelpString = "Usage: assemblyValidator.exe [/r] [/c] [/v] rootDir"
             + Environment.NewLine
             + "/r - recursive (optional)"
             + "/c - check cross-references (optional)"
@@ -202,7 +202,7 @@ namespace assemblyValidator
             UnRecoverableErrors = 5
         }
 
-        static bool verbose = false;
+        static bool _verbose;
 
         private static int Main(string[] args)
         {
@@ -216,7 +216,7 @@ namespace assemblyValidator
                 else if (args[i] == "-c" || args[i] == "/c")
                     enableCrossCheck = true;
                 else if (args[i] == "-v" || args[i] == "/v")
-                    verbose = true;
+                    _verbose = true;
                 else if (string.IsNullOrEmpty(rootFolder))
                     rootFolder = args[i];
             }
@@ -224,13 +224,13 @@ namespace assemblyValidator
             if (string.IsNullOrEmpty(rootFolder))
             {
                 Console.WriteLine("No root folder specified.");
-                Console.WriteLine(helpString);
+                Console.WriteLine(HelpString);
                 return (int)ErrorLevel.MissingRootFolder;
             }
 
             const string configFileType = "*.config";
             string[] dllFileType = { "*.exe", "*.dll" };
-            string[] filesList = null;
+            string[] filesList;
 
             var outdatedList = new List<ReportItem>();
 
@@ -250,7 +250,6 @@ namespace assemblyValidator
 
             foreach (var fromFile in filesList)
             {
-                var configReport = new StringBuilder();
                 var config = new XmlDocument();
 
                 try
@@ -331,7 +330,7 @@ namespace assemblyValidator
 
                     // Get file version.
                     var dllFullFileName = FilePath(fromFile) + dllFileName + ".dll";
-                    Version dllVersion = null;
+                    Version dllVersion;
                     try
                     {
                         dllVersion = AssemblyName.GetAssemblyName(dllFullFileName).Version;
@@ -402,8 +401,8 @@ namespace assemblyValidator
             // check references for files grouped by folder
             while (true)
             {
-                var activeFiles = new List<AssemblyInfoItem>();
-                activeFiles = assemblyList.FindAll(x => !x.processed);
+                List<AssemblyInfoItem> activeFiles;
+                activeFiles = assemblyList.FindAll(x => !x.Processed);
                 if (activeFiles == null || activeFiles.Count <= 0)
                 {
                     break;
@@ -413,7 +412,7 @@ namespace assemblyValidator
                 var folderFiles = assemblyList.FindAll(x => x.FilePath == currentPath);
                 foreach (var srcDllFile in folderFiles)
                 {
-                    srcDllFile.processed = true;
+                    srcDllFile.Processed = true;
 
                     //check cross-references for different versions
                     if (enableCrossCheck)
@@ -424,7 +423,7 @@ namespace assemblyValidator
                             if (srcDllFile.FileName == refFromFile.FileName)
                                 continue;
 
-                            foreach (var referenceItem in refFromFile.referenceList)
+                            foreach (var referenceItem in refFromFile.ReferenceList)
                             {
                                 if (referenceItem.FullFileName == srcDllFile.FileName)
                                 {
@@ -440,13 +439,13 @@ namespace assemblyValidator
                             crossList.Add(verList);
                     }
 
-                    if (srcDllFile.referenceList == null || srcDllFile.referenceList.Count <= 0)
+                    if (srcDllFile.ReferenceList == null || srcDllFile.ReferenceList.Count <= 0)
                     {
                         continue;
                     }
 
                     // check for files with version other than required by caller
-                    foreach (var refFile in srcDllFile.referenceList)
+                    foreach (var refFile in srcDllFile.ReferenceList)
                     {
                         var foundFiles = folderFiles.FindAll(x => x.FileName == refFile.FileName);
                         if (foundFiles.Count > 0)
