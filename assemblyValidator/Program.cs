@@ -1,32 +1,17 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using System.Xml;
 
 namespace assemblyValidator
 {
-    class Program
+    internal class Program
     {
-        class AssemblyLoader : MarshalByRefObject
-        {
-            Assembly _assembly;
-            public void Load(string file)
-            {
-                this._assembly = Assembly.ReflectionOnlyLoadFrom(file);
-            }
-
-            public Version GetVersion()
-            {
-                return this._assembly.GetName().Version;
-            }
-
-            public AssemblyName[] GetReferences()
-            {
-                return this._assembly.GetReferencedAssemblies();
-            }
-        }
 
         private class FileItem
         {
@@ -78,36 +63,118 @@ namespace assemblyValidator
             }
         }
 
-        private static AssemblyInfoItem GetAssemblyInfo(string fullFileName)
+        private class AssemblyDomain
         {
-            var assemblyItem = new AssemblyInfoItem
+            private class AssemblyLoader : MarshalByRefObject
             {
-                FullFileName = fullFileName,
-                FileVersion = new Version(0, 0),
-                ReferenceList = new List<FileItem>()
-            };
-
-            AssemblyName[] references = null;
-            try
-            {
-                var domain = AppDomain.CreateDomain(nameof(AssemblyLoader),
-                    AppDomain.CurrentDomain.Evidence,
-                    new AppDomainSetup
-                    {
-                        ApplicationBase = Path.GetDirectoryName(typeof(AssemblyLoader).Assembly.Location)
-                    });
-                var assemblyLoader = (AssemblyLoader)domain.CreateInstanceAndUnwrap(typeof(AssemblyLoader).Assembly.FullName, "");
-                assemblyLoader.Load(fullFileName);
-                try
+                Assembly _assembly;
+                public void Load(string file)
                 {
-                    assemblyItem.FileVersion = assemblyLoader.GetVersion();
-                    references = assemblyLoader.GetReferences();
+                    this._assembly = Assembly.ReflectionOnlyLoadFrom(file);
+                }
+
+                public Version GetVersion()
+                {
+                    return this._assembly.GetName().Version;
+                }
+
+                public AssemblyName[] GetReferences()
+                {
+                    return this._assembly.GetReferencedAssemblies();
+                }
+            }
+
+            private AppDomain _domain;
+
+            private AssemblyLoader assemblyLoader;
+
+            public AssemblyDomain()
+            {
+                _domain = AppDomain.CreateDomain(nameof(AssemblyLoader),
+                            AppDomain.CurrentDomain.Evidence,
+                            new AppDomainSetup
+                            {
+                                ApplicationBase = Path.GetDirectoryName(typeof(AssemblyLoader).Assembly.Location)
+                            });
+                assemblyLoader = (AssemblyLoader)_domain.CreateInstanceAndUnwrap(typeof(AssemblyLoader).Assembly.FullName, typeof(AssemblyLoader).FullName);
+            }
+
+            public AssemblyInfoItem GetAssemblyInfo(string fullFileName)
+            {
+                var assemblyItem = new AssemblyInfoItem
+                {
+                    FullFileName = fullFileName,
+                    FileVersion = new Version(0, 0),
+                    ReferenceList = new List<FileItem>()
+                };
+
+                AssemblyName[] references = null;
+                try
+                {                    
+                    try
+                    {
+                        assemblyLoader.Load(fullFileName);
+                    }
+                    catch
+                    {
+                        AppDomain.Unload(_domain);
+                        _domain = AppDomain.CreateDomain(nameof(AssemblyLoader),
+                            AppDomain.CurrentDomain.Evidence,
+                            new AppDomainSetup
+                            {
+                                ApplicationBase = Path.GetDirectoryName(typeof(AssemblyLoader).Assembly.Location)
+                            });
+                        assemblyLoader = (AssemblyLoader)_domain.CreateInstanceAndUnwrap(typeof(AssemblyLoader).Assembly.FullName, typeof(AssemblyLoader).FullName);
+
+                        assemblyLoader.Load(fullFileName);
+                    }
+
+                    try
+                    {
+                        assemblyItem.FileVersion = assemblyLoader.GetVersion();
+                        references = assemblyLoader.GetReferences();
+                    }
+                    catch (Exception e1)
+                    {
+                        if (_verbose)
+                        {
+                            Console.WriteLine("Can't get assembly info: " + fullFileName);
+                            Console.WriteLine("Exception: " + e1.Message);
+                        }
+
+                        try
+                        {
+                            if (_verbose)
+                            {
+                                Console.WriteLine("Re-trying to load assembly: " + fullFileName);
+                            }
+
+                            var newAsm = AssemblyName.GetAssemblyName(fullFileName);
+                            assemblyItem.FileVersion = newAsm.Version;
+                        }
+                        catch (Exception e2)
+                        {
+                            if (_verbose)
+                            {
+                                Console.WriteLine("Still can't load assembly: " + fullFileName);
+                                Console.WriteLine("Exception: " + e2.Message);
+                            }
+                        }
+                    }
+
+                    if (references != null)
+                    {
+                        foreach (var dllReference in references)
+                        {
+                            assemblyItem.ReferenceList.Add(new FileItem(dllReference.Name + ".dll", dllReference.Version));
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
                     if (_verbose)
                     {
-                        Console.WriteLine("Can't get assembly info: " + fullFileName);
+                        Console.WriteLine("Can't load assembly: " + fullFileName);
                         Console.WriteLine("Exception: " + e.Message);
                     }
 
@@ -115,7 +182,7 @@ namespace assemblyValidator
                     {
                         if (_verbose)
                         {
-                            Console.WriteLine("Re-trying to load assembly: " + fullFileName);
+                            Console.WriteLine("Re-trying to load version only: " + fullFileName);
                         }
 
                         var newAsm = AssemblyName.GetAssemblyName(fullFileName);
@@ -130,48 +197,14 @@ namespace assemblyValidator
                         }
                     }
                 }
-                finally
-                {
-                    AppDomain.Unload(domain);
-                }
 
-                if (references != null)
-                {
-                    foreach (var dllReference in references)
-                    {
-                        assemblyItem.ReferenceList.Add(new FileItem(dllReference.Name + ".dll", dllReference.Version));
-                    }
-                }
+                return assemblyItem;
             }
-            catch (Exception e)
+
+            public void Unload()
             {
-                if (_verbose)
-                {
-                    Console.WriteLine("Can't load assembly: " + fullFileName);
-                    Console.WriteLine("Exception: " + e.Message);
-                }
-
-                try
-                {
-                    if (_verbose)
-                    {
-                        Console.WriteLine("Re-trying to load assembly: " + fullFileName);
-                    }
-
-                    var newAsm = AssemblyName.GetAssemblyName(fullFileName);
-                    assemblyItem.FileVersion = newAsm.Version;
-                }
-                catch (Exception e2)
-                {
-                    if (_verbose)
-                    {
-                        Console.WriteLine("Still can't load assembly: " + fullFileName);
-                        Console.WriteLine("Exception: " + e2.Message);
-                    }
-                }
+                AppDomain.Unload(_domain);
             }
-
-            return assemblyItem;
         }
 
         private static readonly string HelpString = "Usage: assemblyValidator.exe [/r] [/c] [/v] rootDir"
@@ -192,7 +225,7 @@ namespace assemblyValidator
             + Environment.NewLine
             + "Errorlevel 5 = unrecoverable errors found";
 
-        enum ErrorLevel
+        private enum ErrorLevel
         {
             NoError = 0,
             MissingRootFolder = 1,
@@ -209,16 +242,16 @@ namespace assemblyValidator
             var recursiveFlag = SearchOption.TopDirectoryOnly;
             var enableCrossCheck = false;
             var rootFolder = "";
-            for (int i = 0; i < args.Length; i++)
+            foreach (var argument in args)
             {
-                if (args[i] == "-r" || args[i] == "/r")
+                if (argument == "-r" || argument == "/r")
                     recursiveFlag = SearchOption.AllDirectories;
-                else if (args[i] == "-c" || args[i] == "/c")
+                else if (argument == "-c" || argument == "/c")
                     enableCrossCheck = true;
-                else if (args[i] == "-v" || args[i] == "/v")
+                else if (argument == "-v" || argument == "/v")
                     _verbose = true;
                 else if (string.IsNullOrEmpty(rootFolder))
-                    rootFolder = args[i];
+                    rootFolder = argument;
             }
 
             if (string.IsNullOrEmpty(rootFolder))
@@ -248,7 +281,8 @@ namespace assemblyValidator
                 return (int)ErrorLevel.FileSearchError;
             }
 
-            foreach (var fromFile in filesList)
+            var domain = new AssemblyDomain();
+            Parallel.ForEach(filesList, fromFile =>
             {
                 var config = new XmlDocument();
 
@@ -259,14 +293,14 @@ namespace assemblyValidator
                 catch
                 {
                     // not XML file, skip it
-                    continue;
+                    return;
                 }
 
                 var assemblyNodes = config.GetElementsByTagName("dependentAssembly");
                 if (assemblyNodes.Count <= 0)
                 {
                     // no assembly references, skip it
-                    continue;
+                    return;
                 }
 
                 // process each assembly reference in the .config file
@@ -317,6 +351,7 @@ namespace assemblyValidator
                             catch
                             {
                             }
+
                             // DLL version tag found in XML
                             break;
                         }
@@ -371,10 +406,10 @@ namespace assemblyValidator
 
                     }
                 }
-            }
+            });
 
             // collect folder assembly collection
-            var assemblyList = new List<AssemblyInfoItem>();
+            var assemblyList = new BlockingCollection<AssemblyInfoItem>();
             foreach (var fileType in dllFileType)
             {
                 try
@@ -389,27 +424,30 @@ namespace assemblyValidator
                         + "Possibly a file system link found.");
                     return (int)ErrorLevel.FileSearchError;
                 }
+
+                var fileNum = filesList.Length;
                 foreach (var file in filesList)
                 {
-                    var newAssembly = GetAssemblyInfo(file);
+                    var newAssembly = domain.GetAssemblyInfo(file);
                     assemblyList.Add(newAssembly);
+                    fileNum--;
                 }
             }
+            domain.Unload();
 
             var crossList = new List<CrossReportItem>();
 
             // check references for files grouped by folder
             while (true)
             {
-                List<AssemblyInfoItem> activeFiles;
-                activeFiles = assemblyList.FindAll(x => !x.Processed);
-                if (activeFiles == null || activeFiles.Count <= 0)
+                var activeFiles = assemblyList.Where(x => !x.Processed);
+                if (activeFiles == null || !activeFiles.Any())
                 {
                     break;
                 }
 
-                var currentPath = activeFiles[0].FilePath;
-                var folderFiles = assemblyList.FindAll(x => x.FilePath == currentPath);
+                var currentPath = activeFiles.First().FilePath;
+                var folderFiles = assemblyList.Where(x => x.FilePath == currentPath);
                 foreach (var srcDllFile in folderFiles)
                 {
                     srcDllFile.Processed = true;
@@ -447,28 +485,29 @@ namespace assemblyValidator
                     // check for files with version other than required by caller
                     foreach (var refFile in srcDllFile.ReferenceList)
                     {
-                        var foundFiles = folderFiles.FindAll(x => x.FileName == refFile.FileName);
-                        if (foundFiles.Count > 0)
+                        var foundFiles = folderFiles.Where(x => x.FileName == refFile.FileName);
+                        if (foundFiles.Any())
                         {
-                            if (foundFiles.Count > 1)
+                            if (foundFiles.Count() > 1)
                             {
                                 Console.WriteLine("Duplicate assembly name in collection: " + refFile.FileName);
                             }
 
-                            if (foundFiles[0].FileVersion < refFile.FileVersion)
+                            var element = foundFiles.First();
+                            if (element.FileVersion < refFile.FileVersion)
                             {
                                 var fromFileItem = new FileItem(srcDllFile.FullFileName, refFile.FileVersion);
 
-                                var rptList = outdatedList.FindAll(x => x.AssemblyFile.FullFileName == foundFiles[0].FullFileName);
-                                if (rptList.Count <= 0)
+                                var rptList = outdatedList.Where(x => x.AssemblyFile.FullFileName == element.FullFileName);
+                                if (!rptList.Any())
                                 {
-                                    var rpt = new ReportItem(foundFiles[0].FullFileName, foundFiles[0].FileVersion);
+                                    var rpt = new ReportItem(element.FullFileName, element.FileVersion);
                                     rpt.CalledFromFiles.Add(fromFileItem);
                                     outdatedList.Add(rpt);
                                 }
                                 else
                                 {
-                                    rptList[0].CalledFromFiles.Add(fromFileItem);
+                                    rptList.First().CalledFromFiles.Add(fromFileItem);
                                 }
                             }
                         }
@@ -478,8 +517,7 @@ namespace assemblyValidator
 
             var errorLevel = ErrorLevel.NoError;
             // generate report to console
-            // generate batch file to get correct files if any
-            if (crossList.Count > 1)
+            if (crossList.Any())
             {
                 Console.WriteLine("Assembly files reference check:");
                 errorLevel = ErrorLevel.MultiReference;
@@ -496,6 +534,7 @@ namespace assemblyValidator
                 }
             }
 
+            // generate batch file to get correct files if any
             if (outdatedList.Count > 0)
             {
                 Console.WriteLine("Assembly files reference check:");
@@ -523,7 +562,7 @@ namespace assemblyValidator
                                             + " expected by "
                                             + refFile.FileName);
 
-                        var correctFile = assemblyList.Find(x => x.FileName == report.AssemblyFile.FileName && x.FileVersion == refFile.FileVersion);
+                        var correctFile = assemblyList.FirstOrDefault(x => x.FileName == report.AssemblyFile.FileName && x.FileVersion == refFile.FileVersion);
                         if (correctFile != null)
                         {
                             copyCommand.AppendLine("rem v." + correctFile.FileVersion + " => " + report.AssemblyFile.FileVersion);
